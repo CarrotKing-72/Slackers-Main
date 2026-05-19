@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: e565db81b48bdaa47b14c6444203ffa8
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 209066
+  packageName: Smooth Pixel
+  packageVersion: 1.0
+  assetPath: Assets/Smooth Pixel/Editor/ReadmeEditor.cs
+  uploadId: 469431

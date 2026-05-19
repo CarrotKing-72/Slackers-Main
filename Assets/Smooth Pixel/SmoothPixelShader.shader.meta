@@ -1,0 +1,16 @@
+fileFormatVersion: 2
+guid: c481b323ad767f04ebe48157095bdaab
+ShaderImporter:
+  externalObjects: {}
+  defaultTextures: []
+  nonModifiableTextures: []
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 209066
+  packageName: Smooth Pixel
+  packageVersion: 1.0
+  assetPath: Assets/Smooth Pixel/SmoothPixelShader.shader
+  uploadId: 469431
