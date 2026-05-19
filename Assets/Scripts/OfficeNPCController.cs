@@ -276,27 +276,31 @@ public class OfficeNPCController : MonoBehaviour
             return;
         }
 
-        // If bumped above the NavMesh surface (e.g. by the player), snap straight back down
-        float navMeshGroundY = _agent.nextPosition.y + characterStandingHeight;
-        if (transform.position.y > navMeshGroundY + 1f)
-        {
-            transform.position = new Vector3(_agent.nextPosition.x, navMeshGroundY, _agent.nextPosition.z);
-            _agent.nextPosition = transform.position;
-            return;
-        }
+        // Use NavMesh surface as the authoritative ground Y — _agent.nextPosition.y can't be
+        // trusted here because we sync it back from transform.position every frame, so it
+        // inherits any upward displacement the physics engine applied.
+        NavMesh.SamplePosition(transform.position, out NavMeshHit navHit, 10f, NavMesh.AllAreas);
+        float navGroundY = navHit.position.y + characterStandingHeight;
 
-        // Cast from well above the character so the origin is never inside floor geometry
+        // Physics raycast refines Y for uneven geometry, but only if it agrees with the NavMesh
         float castOriginHeight = characterStandingHeight + 2f;
-        float targetY = transform.position.y;
+        float targetY = navGroundY;
         if (Physics.Raycast(transform.position + Vector3.up * castOriginHeight,
                             Vector3.down, out RaycastHit hit, castOriginHeight + 5f, _finalGroundMask))
         {
-            targetY = hit.point.y + characterStandingHeight;
+            float rayY = hit.point.y + characterStandingHeight;
+            if (Mathf.Abs(rayY - navGroundY) < 0.5f)
+                targetY = rayY;
         }
+
+        // Snap immediately when significantly above ground, smooth otherwise
+        float newY = Mathf.Abs(transform.position.y - targetY) > 0.8f
+            ? targetY
+            : Mathf.Lerp(transform.position.y, targetY, Time.deltaTime * heightSmoothSpeed);
 
         transform.position = new Vector3(
             _agent.nextPosition.x,
-            Mathf.Lerp(transform.position.y, targetY, Time.deltaTime * heightSmoothSpeed),
+            newY,
             _agent.nextPosition.z);
 
         _agent.nextPosition = transform.position;
