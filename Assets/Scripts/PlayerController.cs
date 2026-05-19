@@ -9,6 +9,9 @@ public class PlayerController : MonoBehaviour
     public float rotationSmoothTime = 0.1f;
     public bool allowMovement = true;
 
+    [Header("Leg IK Settings")]
+    public float legSpeedMultiplier = 1.5f;
+
     [Header("Interact Settings")]
     public bool interactKeyPressed = false;
     public bool staplerObtained = false;
@@ -105,12 +108,15 @@ public class PlayerController : MonoBehaviour
 
     private void UpdateLegs()
     {
-        float movementSpeed = moveDirection.magnitude * moveSpeed;
+        // Use actual physics velocity so the legs respond to real movement, not just input
+        Vector3 flatVelocity = new Vector3(rb.linearVelocity.x, 0f, rb.linearVelocity.z);
+        float speed = flatVelocity.magnitude;
+        Vector3 dir = speed > 0.1f ? flatVelocity.normalized : Vector3.zero;
 
         foreach (var leg in legs)
         {
-            leg.MovementDirection = moveDirection.normalized;
-            leg.MovementSpeed = movementSpeed;
+            leg.MovementDirection = dir;
+            leg.MovementSpeed = speed * legSpeedMultiplier;
             leg.CharacterRotation = transform.rotation;
         }
     }

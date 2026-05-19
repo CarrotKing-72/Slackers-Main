@@ -5,9 +5,10 @@ public class SmoothStep : MonoBehaviour
 {
     [Header("Leg Movement Settings")]
     public GameObject legAimPosition;
-    public AnimationCurve stepCurve; // Arc of the step
-    public float stepHeight = 0.2f; // Maximum height of the step arc
-    public float oppositeLegBuffer = 0.15f; // Buffer time for opposite leg
+    public AnimationCurve stepCurve;
+    public float stepHeight = 0.2f;
+    public float stepSpeed = 1f;
+    public float oppositeLegBuffer = 0.15f;
 
     [Header("References")]
     public SmoothStep oppositeLeg;
@@ -80,21 +81,17 @@ public class SmoothStep : MonoBehaviour
 
     private Vector3 CalculateTargetPosition()
     {
-        
         Quaternion uprightRotation = Quaternion.Euler(0, CharacterRotation.eulerAngles.y, 0);
 
-        
+        // Lead in actual movement direction; fall back to character forward when still
+        Vector3 leadDir = MovementDirection.magnitude > 0.05f
+            ? MovementDirection.normalized
+            : uprightRotation * Vector3.forward;
 
-        //  Define the lead distance based on speed
-        float leadDistance = Mathf.Lerp(0.4f, 1f, MovementSpeed / 10f);
+        // Lead fades to zero at rest so feet sit naturally under the character
+        float leadDistance = Mathf.Lerp(0f, 0.35f, Mathf.Clamp01(MovementSpeed / 8f));
 
-        //  Calculate the local forward direction of the character
-        Vector3 characterForward = uprightRotation * Vector3.forward;
-
-        //  Calculate the world target position: Leg Origin + Character's Forward Lead
-        Vector3 targetPos = legAimPosition.transform.position + (characterForward * leadDistance);
-
-        return targetPos;
+        return legAimPosition.transform.position + leadDir * leadDistance;
     }
 
     private void StartStep(Vector3 targetPos)
@@ -108,19 +105,20 @@ public class SmoothStep : MonoBehaviour
 
     private void PerformStep()
     {
-        stepProgress += Time.deltaTime / stepCooldown;
+        // Track the current landing target so the foot doesn't get left behind as the character moves
+        endPos = CalculateTargetPosition();
+
+        stepProgress += Time.deltaTime * stepSpeed / stepCooldown;
         stepProgress = Mathf.Clamp01(stepProgress);
 
-        // Interpolate position and add arc height
         Vector3 flat = Vector3.Lerp(startPos, endPos, stepProgress);
         float arcHeight = stepCurve.Evaluate(stepProgress) * stepHeight;
         transform.position = flat + Vector3.up * arcHeight;
 
-        // End the step when progress is complete
         if (stepProgress >= 1f)
         {
             transform.position = endPos;
-            currentIKPosition = transform.position;
+            currentIKPosition = endPos;
             legIsMoving = false;
         }
     }

@@ -7,13 +7,13 @@ public class LegGrounding : MonoBehaviour
     [Header("Grounding Settings")]
     public Vector3 groundingOffset = new Vector3(0f, 0.75f, 0f);
     public GameObject raycastOrigin;
+    public LayerMask groundLayer;
 
-    // Private variables
     private int layerMask;
 
     void Start()
     {
-        layerMask = LayerMask.GetMask("Ground");
+        layerMask = groundLayer.value != 0 ? groundLayer.value : LayerMask.GetMask("Ground");
 
         // Default to the parent object if raycastOrigin is not set
         if (raycastOrigin == null && transform.parent != null)

@@ -1,81 +1,172 @@
-﻿using UnityEngine;
+using UnityEngine;
+using UnityEngine.AI;
 using System.Collections;
 using System.Collections.Generic;
 
-[RequireComponent(typeof(UnityEngine.AI.NavMeshAgent))]
+[RequireComponent(typeof(NavMeshAgent))]
 public class OfficeNPCController : MonoBehaviour
 {
+    // ─── Detection / Alert ───────────────────────────────────────────────────
     [Header("Detection Settings")]
     public float alertRadius = 5f;
     public float maxSuspicion = 20f;
     public float currentSuspicion = 0f;
 
-    [Header("Random Idle Settings")]
-    public float idleRadius = 5f;              // Maximum distance for random idle movement
-    public float idleDelay = 2f;               // Time between picking new idle positions
-    public float idleSpeed = 2f;               // Movement speed while idle
+    // ─── Wander / Patrol ─────────────────────────────────────────────────────
+    [Header("Wander Settings")]
+    [SerializeField] private float _moveSpeed = 2f;
+    [SerializeField] private float _wanderRadius = 8f;
+    [SerializeField] private float _wanderWaitMin = 1f;
+    [SerializeField] private float _wanderWaitMax = 3f;
+    [Tooltip("Optional fixed patrol route. Leave empty for random wander.")]
+    [SerializeField] private Transform[] _patrolPoints;
 
+    // ─── Alert ───────────────────────────────────────────────────────────────
     [Header("Alert Settings")]
-    public float idleResumeDelay = 5f;         // Time after alert to resume idle
+    public float idleResumeDelay = 5f;
 
-    [HideInInspector] public Transform manualTarget;  // Temporary alert target
+    // ─── IK Leg Settings ─────────────────────────────────────────────────────
+    [Header("IK Leg Settings")]
+    [Tooltip("Multiplier fed to SmoothStep — increase to make legs step faster.")]
+    public float legSpeedMultiplier = 2f;
+    [Tooltip("Multiplier for vertical step amplitude.")]
+    public float legVerticalityMultiplier = 1f;
 
-    private UnityEngine.AI.NavMeshAgent agent;
-    private Coroutine idleCoroutine;
-    private Coroutine resumeIdleCoroutine;
+    [Header("Root Height (IK Grounding)")]
+    [Tooltip("Disable NavMeshAgent Y so IK controls vertical position.")]
+    public bool disableAgentYControl = true;
+    [Tooltip("Height of the character pivot above the ground.")]
+    public float characterStandingHeight = 1f;
+    public LayerMask groundLayer;
+    public float heightSmoothSpeed = 15f;
 
+    // ─── State ───────────────────────────────────────────────────────────────
+    public enum NPCState { Wander, Alert }
+    private NPCState _currentState = NPCState.Wander;
+    public NPCState CurrentState => _currentState;
+
+    [HideInInspector] public Transform manualTarget;
+
+    // ─── Private ─────────────────────────────────────────────────────────────
+    private NavMeshAgent _agent;
+    private Coroutine _resumeWanderCoroutine;
+
+    private bool _isWaiting;
+    private float _wanderWaitTimer;
+    private float _wanderWaitDuration;
+    private int _currentPatrolIndex;
+
+    private SmoothStep[] _legs;
+    private Component[] _legGroundingComponents;
+    private int _finalGroundMask;
+
+    // ─── Init ─────────────────────────────────────────────────────────────────
     private void Start()
     {
-        agent = GetComponent<UnityEngine.AI.NavMeshAgent>();
-        agent.speed = idleSpeed;
+        _agent = GetComponent<NavMeshAgent>();
+        _agent.speed = _moveSpeed;
 
-        StartIdle();
+        SetupLegs();
+        SetupGroundMask();
+
+        if (disableAgentYControl)
+            _agent.updatePosition = false;
+
+        Debug.Log($"[OfficeNPCController] {gameObject.name}: found {_legs.Length} legs. disableAgentYControl={disableAgentYControl}");
+
+        SetNewWanderDestination();
     }
 
+    // ─── Main Loop ────────────────────────────────────────────────────────────
     private void Update()
     {
-        // Move toward alert target if exists
-        if (manualTarget != null)
+        switch (_currentState)
         {
-            agent.isStopped = false;
-            agent.SetDestination(manualTarget.position);
+            case NPCState.Wander: UpdateWander(); break;
+            case NPCState.Alert:  UpdateAlert();  break;
         }
+
+        HandleRootHeight();
+        KeepUpright();
+        UpdateLegs();
     }
 
-    /// <summary>
-    /// Pick a random idle position within a radius
-    /// </summary>
-    private IEnumerator IdleRoutine()
+    // ─── Wander ───────────────────────────────────────────────────────────────
+    private void UpdateWander()
     {
-        while (true)
+        if (_patrolPoints != null && _patrolPoints.Length > 0)
+            UpdatePatrolPoints();
+        else
+            UpdateRandomWander();
+    }
+
+    private void UpdatePatrolPoints()
+    {
+        if (!_isWaiting && HasReachedDestination())
         {
-            if (manualTarget == null)
+            _isWaiting = true;
+            _wanderWaitDuration = Random.Range(_wanderWaitMin, _wanderWaitMax);
+            _wanderWaitTimer = 0f;
+        }
+
+        if (_isWaiting)
+        {
+            _wanderWaitTimer += Time.deltaTime;
+            if (_wanderWaitTimer >= _wanderWaitDuration)
             {
-                Vector3 randomPos = transform.position + Random.insideUnitSphere * idleRadius;
-                randomPos.y = transform.position.y;
-
-                UnityEngine.AI.NavMeshHit hit;
-                if (UnityEngine.AI.NavMesh.SamplePosition(randomPos, out hit, idleRadius, UnityEngine.AI.NavMesh.AllAreas))
-                {
-                    agent.SetDestination(hit.position);
-                }
+                _isWaiting = false;
+                _currentPatrolIndex = (_currentPatrolIndex + 1) % _patrolPoints.Length;
+                _agent.SetDestination(_patrolPoints[_currentPatrolIndex].position);
             }
-
-            yield return new WaitForSeconds(idleDelay);
         }
     }
 
-    private void StartIdle()
+    private void UpdateRandomWander()
     {
-        if (idleCoroutine != null)
-            StopCoroutine(idleCoroutine);
+        if (!_isWaiting && HasReachedDestination())
+        {
+            _isWaiting = true;
+            _wanderWaitDuration = Random.Range(_wanderWaitMin, _wanderWaitMax);
+            _wanderWaitTimer = 0f;
+        }
 
-        idleCoroutine = StartCoroutine(IdleRoutine());
+        if (_isWaiting)
+        {
+            _wanderWaitTimer += Time.deltaTime;
+            if (_wanderWaitTimer >= _wanderWaitDuration)
+            {
+                _isWaiting = false;
+                SetNewWanderDestination();
+            }
+        }
     }
 
-    /// <summary>
-    /// Assigns a temporary alert target for the NPC
-    /// </summary>
+    private bool HasReachedDestination()
+    {
+        return _agent.hasPath && !_agent.pathPending && _agent.remainingDistance <= _agent.stoppingDistance + 0.1f;
+    }
+
+    private void SetNewWanderDestination()
+    {
+        Vector3 randomDir = Random.insideUnitSphere * _wanderRadius + transform.position;
+        if (NavMesh.SamplePosition(randomDir, out NavMeshHit hit, _wanderRadius, NavMesh.AllAreas))
+            _agent.SetDestination(hit.position);
+    }
+
+    // ─── Alert ────────────────────────────────────────────────────────────────
+    private void UpdateAlert()
+    {
+        if (manualTarget == null)
+        {
+            TransitionTo(NPCState.Wander);
+            SetNewWanderDestination();
+            return;
+        }
+
+        _agent.isStopped = false;
+        _agent.SetDestination(manualTarget.position);
+    }
+
     public void SetTarget(Vector3 position)
     {
         if (manualTarget == null)
@@ -89,31 +180,37 @@ public class OfficeNPCController : MonoBehaviour
             manualTarget.position = position;
         }
 
-        // Stop any existing resume coroutine
-        if (resumeIdleCoroutine != null)
-            StopCoroutine(resumeIdleCoroutine);
+        TransitionTo(NPCState.Alert);
 
-        resumeIdleCoroutine = StartCoroutine(ResumeIdleAfterDelay());
+        if (_resumeWanderCoroutine != null)
+            StopCoroutine(_resumeWanderCoroutine);
+        _resumeWanderCoroutine = StartCoroutine(ResumeWanderAfterDelay());
     }
 
-    private IEnumerator ResumeIdleAfterDelay()
+    private IEnumerator ResumeWanderAfterDelay()
     {
         yield return new WaitForSeconds(idleResumeDelay);
 
-        // Clear alert target to resume idle movement
         if (manualTarget != null)
         {
             Destroy(manualTarget.gameObject);
             manualTarget = null;
         }
+
+        TransitionTo(NPCState.Wander);
+        SetNewWanderDestination();
     }
 
-    /// <summary>
-    /// Alerts all NPCs to the player's position when a minigame is completed
-    /// </summary>
+    private void TransitionTo(NPCState newState)
+    {
+        if (_currentState == newState) return;
+        _currentState = newState;
+    }
+
+    // ─── Static Alert (called by minigame events) ─────────────────────────────
     public static void AlertNPCs(Vector3 playerPosition)
     {
-        OfficeNPCController[] npcs = Object.FindObjectsOfType<OfficeNPCController>(true);
+        OfficeNPCController[] npcs = FindObjectsOfType<OfficeNPCController>(true);
         GameManager gm = FindFirstObjectByType<GameManager>();
 
         if (gm == null)
@@ -128,13 +225,11 @@ public class OfficeNPCController : MonoBehaviour
         foreach (var npc in npcs)
         {
             float distance = Vector3.Distance(npc.transform.position, playerPosition);
-
             if (distance <= npc.alertRadius)
             {
                 float suspicion = npc.maxSuspicion * (1f - (distance / npc.alertRadius));
                 npc.currentSuspicion += suspicion;
                 totalSuspicion += suspicion;
-
                 npc.SetTarget(playerPosition);
                 alertedNPCs.Add(npc);
             }
@@ -145,13 +240,102 @@ public class OfficeNPCController : MonoBehaviour
             float scorePerSuspicion = 0.5f;
             int rawDecrement = Mathf.RoundToInt(totalSuspicion * scorePerSuspicion / 5f) * 5;
             int decrement = Mathf.Max(rawDecrement, 5);
-
             gm.RemoveScore(decrement);
-            Debug.Log($"Alerted {alertedNPCs.Count} NPCs. Total suspicion: {totalSuspicion:F1} → Score decreased by {decrement}. Current score: {gm.currentScore}");
+            Debug.Log($"Alerted {alertedNPCs.Count} NPCs. Total suspicion: {totalSuspicion:F1} → Score -{decrement}. Score: {gm.currentScore}");
         }
         else
         {
-            Debug.Log("No NPCs were close enough to see the player. No score lost.");
+            Debug.Log("No NPCs close enough to detect the player.");
         }
+    }
+
+    // ─── IK ───────────────────────────────────────────────────────────────────
+    private void SetupLegs()
+    {
+        _legs = GetComponentsInChildren<SmoothStep>();
+        _legGroundingComponents = new Component[_legs.Length];
+
+        for (int i = 0; i < _legs.Length; i++)
+        {
+            _legGroundingComponents[i] = _legs[i].GetComponent<LegGrounding>();
+        }
+    }
+
+    private void SetupGroundMask()
+    {
+        _finalGroundMask = groundLayer.value != 0
+            ? groundLayer.value & ~(1 << gameObject.layer)
+            : ~0 & ~(1 << gameObject.layer);
+    }
+
+    private void HandleRootHeight()
+    {
+        if (!disableAgentYControl)
+        {
+            transform.position = _agent.nextPosition;
+            return;
+        }
+
+        // If bumped above the NavMesh surface (e.g. by the player), snap straight back down
+        float navMeshGroundY = _agent.nextPosition.y + characterStandingHeight;
+        if (transform.position.y > navMeshGroundY + 1f)
+        {
+            transform.position = new Vector3(_agent.nextPosition.x, navMeshGroundY, _agent.nextPosition.z);
+            _agent.nextPosition = transform.position;
+            return;
+        }
+
+        // Cast from well above the character so the origin is never inside floor geometry
+        float castOriginHeight = characterStandingHeight + 2f;
+        float targetY = transform.position.y;
+        if (Physics.Raycast(transform.position + Vector3.up * castOriginHeight,
+                            Vector3.down, out RaycastHit hit, castOriginHeight + 5f, _finalGroundMask))
+        {
+            targetY = hit.point.y + characterStandingHeight;
+        }
+
+        transform.position = new Vector3(
+            _agent.nextPosition.x,
+            Mathf.Lerp(transform.position.y, targetY, Time.deltaTime * heightSmoothSpeed),
+            _agent.nextPosition.z);
+
+        _agent.nextPosition = transform.position;
+    }
+
+    private void KeepUpright()
+    {
+        Quaternion r = transform.rotation;
+        transform.rotation = Quaternion.Euler(0f, r.eulerAngles.y, 0f);
+    }
+
+    private void UpdateLegs()
+    {
+        if (_legs == null || _legs.Length == 0) return;
+
+        float speed = _agent.velocity.magnitude;
+        Vector3 dir = _agent.velocity.normalized;
+        float legSpeed = speed * legSpeedMultiplier;
+
+        for (int i = 0; i < _legs.Length; i++)
+        {
+            SmoothStep leg = _legs[i];
+            var grounding = _legGroundingComponents[i];
+
+            if (grounding != null)
+                ((Behaviour)grounding).enabled = !leg.legIsMoving;
+
+            leg.MovementDirection = dir;
+            leg.MovementSpeed = legSpeed * legVerticalityMultiplier;
+            leg.CharacterRotation = transform.rotation;
+        }
+    }
+
+    // ─── Gizmos ───────────────────────────────────────────────────────────────
+    private void OnDrawGizmosSelected()
+    {
+        Gizmos.color = Color.yellow;
+        Gizmos.DrawWireSphere(transform.position, alertRadius);
+        Gizmos.color = Color.cyan;
+        Gizmos.DrawWireSphere(transform.position, _wanderRadius);
     }
 }
